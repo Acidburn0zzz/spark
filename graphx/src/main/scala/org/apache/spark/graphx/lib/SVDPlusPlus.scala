@@ -71,7 +71,9 @@ object SVDPlusPlus {
     val u = rs / rc
 
     // construct graph
-    var g = Graph.fromEdges(edges, defaultF(conf.rank)).cache()
+    var g = Graph.fromEdges(edges, defaultF(conf.rank))
+    g.cache()
+    materialize(g)
     edges.unpersist()
 
     // Calculate initial bias and norm
@@ -84,6 +86,7 @@ object SVDPlusPlus {
        msg: Option[(Long, Double)]) =>
         (vd._1, vd._2, msg.get._2 / msg.get._1, 1.0 / scala.math.sqrt(msg.get._1))
     }
+    materialize(gJoinT0)
     g.unpersist()
     g = gJoinT0
 
@@ -123,6 +126,7 @@ object SVDPlusPlus {
           if (msg.isDefined) (vd._1, vd._1
             .addColumnVector(msg.get.mul(vd._4)), vd._3, vd._4) else vd
       }
+      materialize(gJoinT1)
       g.unpersist()
       g = gJoinT1
 
@@ -139,6 +143,7 @@ object SVDPlusPlus {
           (vd._1.addColumnVector(msg.get._1), vd._2.addColumnVector(msg.get._2),
             vd._3 + msg.get._3, vd._4)
       }
+      materialize(gJoinT2)
       g.unpersist()
       g = gJoinT2
     }
@@ -154,15 +159,26 @@ object SVDPlusPlus {
       val err = (ctx.attr - pred) * (ctx.attr - pred)
       ctx.sendToDst(err)
     }
+
     g.cache()
     val t3 = g.aggregateMessages[Double](sendMsgTestF(conf, u), _ + _)
     val gJoinT3 = g.outerJoinVertices(t3) {
       (vid: VertexId, vd: (DoubleMatrix, DoubleMatrix, Double, Double), msg: Option[Double]) =>
         if (msg.isDefined) (vd._1, vd._2, vd._3, msg.get) else vd
     }
+    materialize(gJoinT3)
     g.unpersist()
     g = gJoinT3
 
     (g, u)
   }
+
+  /**
+   * Forces materialization of a Graph by count()ing its RDDs.
+   */
+  private def materialize(g: Graph[_,_]): Unit = {
+    g.vertices.count()
+    g.edges.count()
+  }
+
 }
